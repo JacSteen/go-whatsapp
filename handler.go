@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	"github.com/Rhymen/go-whatsapp/binary"
 	"github.com/Rhymen/go-whatsapp/binary/proto"
 )
@@ -98,6 +100,14 @@ type ContactMessageHandler interface {
 }
 
 /*
+The ContactsArrayMessageHandler interface needs to be implemented to receive contacts dispatched by dispatcher.
+*/
+type ContactsArrayMessageHandler interface {
+	Handler
+	HandleContactsArrayMessage(message ContactsArrayMessage)
+}
+
+/*
 The JsonMessageHandler interface needs to be implemented to receive json messages dispatched by the dispatcher.
 These json messages contain status updates of every kind sent by WhatsAppWeb servers. WhatsAppWeb uses these messages
 to built a Store, which is used to save these "secondary" information. These messages may contain
@@ -170,6 +180,19 @@ func (wac *Conn) shouldCallSynchronously(handler Handler) bool {
 }
 
 func (wac *Conn) handle(message interface{}) {
+	defer func() {
+		if errIfc := recover(); errIfc != nil {
+			if err, ok := errIfc.(error); ok {
+				wac.unsafeHandle(errors.Wrap(err, "panic in WhatsApp handler"))
+			} else {
+				wac.unsafeHandle(fmt.Errorf("panic in WhatsApp handler: %v", errIfc))
+			}
+		}
+	}()
+	wac.unsafeHandle(message)
+}
+
+func (wac *Conn) unsafeHandle(message interface{}) {
 	wac.handleWithCustomHandlers(message, wac.handler)
 }
 
@@ -282,6 +305,17 @@ func (wac *Conn) handleWithCustomHandlers(message interface{}, handlers []Handle
 					x.HandleContactMessage(m)
 				} else {
 					go x.HandleContactMessage(m)
+				}
+			}
+		}
+
+	case ContactsArrayMessage:
+		for _, h := range handlers {
+			if x, ok := h.(ContactsArrayMessageHandler); ok {
+				if wac.shouldCallSynchronously(h) {
+					x.HandleContactsArrayMessage(m)
+				} else {
+					go x.HandleContactsArrayMessage(m)
 				}
 			}
 		}
